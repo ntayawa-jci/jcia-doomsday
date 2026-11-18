@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JCI Alabang Blockscreening – Seat Selection (Dec 16)</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 16px; background: #9fb3cc; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { font-size: 13px; margin-bottom: 12px; }
+  .screen { background: #fff; text-align: center; letter-spacing: .5em; font-weight: 700; padding: 8px; margin: 0 auto 20px; max-width: 760px; }
+  .plan { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-bottom: 18px; }
+  .block { display: grid; grid-template-columns: repeat(4, 44px); gap: 3px; }
+  .seat { height: 38px; border: 1px solid #555; background: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; }
+  .seat.blocked { background: #6b6b6b; color: #fff; cursor: not-allowed; }
+  .seat.taken { background: #ffe600; cursor: not-allowed; font-weight: 600; }
+  .seat.selected { background: #60a5fa; color: #fff; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin-bottom: 16px; }
+  .legend span::before { content: ""; display: inline-block; width: 14px; height: 14px; border: 1px solid #555; margin-right: 6px; vertical-align: -2px; }
+  .lg-free::before { background: #fff; }
+  .lg-taken::before { background: #ffe600 !important; }
+  .lg-blocked::before { background: #6b6b6b !important; }
+  .lg-sel::before { background: #60a5fa !important; }
+  .panels { display: flex; gap: 16px; flex-wrap: wrap; }
+  .panel { background: #fff; padding: 14px; flex: 1 1 300px; max-width: 480px; }
+  .panel h2 { font-size: 15px; margin: 0 0 8px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 8px; font-size: 14px; }
+  button { padding: 8px 14px; font-size: 14px; cursor: pointer; background: #1e3a5f; color: #fff; border: 0; }
+  button.small { padding: 4px 8px; font-size: 12px; background: #b91c1c; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+  .msg { margin-top: 10px; font-size: 13px; color: #1e3a5f; min-height: 18px; }
+  .count { font-size: 13px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>JCI Alabang – Blockscreening, December 16</h1>
+<div class="sub">Pick your seats, enter your name, then press Reserve. Yellow seats are already taken and update live for everyone viewing this page.</div>
+
+<div class="screen">S C R E E N</div>
+<div class="plan" id="plan"></div>
+
+<div class="legend">
+  <span class="lg-free">Available</span>
+  <span class="lg-sel">Your selection</span>
+  <span class="lg-taken">Taken</span>
+</div>
+
+<div class="panels">
+  <div class="panel">
+    <h2>Reserve seats</h2>
+    <input id="name" placeholder="Full name of ticket holder">
+    <div id="selText" class="count">No seats selected.</div>
+    <div style="margin-top:8px"><button id="reserveBtn">Reserve selected seats</button></div>
+  </div>
+  <div class="panel">
+    <h2>Taken seats (<span id="takenCount">0</span>)</h2>
+    <div id="takenList"><div class="count">None yet.</div></div>
+  </div>
+</div>
+<div class="msg" id="msg"></div>
+
+<script>
+const BLOCKED = new Set([]);
+const BLOCKS = [[16,15,14,13],[12,11,10,9],[8,7,6,5],[4,3,2,1]];
+const ROWS = ["A","B","C","D","E"];
+
+let taken = {};          // seatId -> { name, reservedAt }
+const selected = new Set();
+let db = null;
+
+const msgEl = document.getElementById("msg");
+function say(t){ msgEl.textContent = t; }
+
+function renderPlan(){
+  const plan = document.getElementById("plan");
+  plan.innerHTML = "";
+  BLOCKS.forEach(cols => {
+    const b = document.createElement("div");
+    b.className = "block";
+    ROWS.forEach(r => cols.forEach(c => {
+      const id = r + c;
+      const s = document.createElement("div");
+      s.className = "seat";
+      s.textContent = id;
+      if (BLOCKED.has(id)) {
+        s.classList.add("blocked");
+      } else if (taken[id]) {
+        s.classList.add("taken");
+        s.title = "Reserved by " + taken[id].name;
+      } else {
+        if (selected.has(id)) s.classList.add("selected");
+        s.onclick = () => toggleSeat(id);
+      }
+      b.appendChild(s);
+    }));
+    plan.appendChild(b);
+  });
+}
+
+function renderPanels(){
+  const sel = [...selected].sort();
+  document.getElementById("selText").textContent =
+    sel.length ? "Selected (" + sel.length + "): " + sel.join(", ") : "No seats selected.";
+
+  const ids = Object.keys(taken).sort();
+  document.getElementById("takenCount").textContent = ids.length;
+  const list = document.getElementById("takenList");
+  if (!ids.length) { list.innerHTML = '<div class="count">None yet.</div>'; return; }
+  list.innerHTML = "";
+  ids.forEach(id => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("span");
+    label.textContent = id + " – " + taken[id].name;
+    const btn = document.createElement("button");
+    btn.className = "small";
+    btn.textContent = "Release";
+    btn.onclick = () => releaseSeat(id);
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+function renderAll(){ renderPlan(); renderPanels(); }
+
+function toggleSeat(id){
+  if (taken[id]) return;
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  renderAll();
+}
+
+async function reserve(){
+  const name = document.getElementById("name").value.trim();
+  const ids = [...selected];
+  if (!name) { say("Please enter the ticket holder's name."); return; }
+  if (!ids.length) { say("Please select at least one seat."); return; }
+  const clash = ids.filter(id => taken[id]);
+  if (clash.length) { say("Already taken, please choose again: " + clash.join(", ")); renderAll(); return; }
+  if (!db) { say("Live saving is not available in this view. Open the page while signed in with edit access."); return; }
+  try {
+    for (const id of ids) {
+      await db.collection("seats").doc(id).set({ name, reservedAt: new Date().toISOString() });
+    }
+    selected.clear();
+    document.getElementById("name").value = "";
+    say("Reserved " + ids.join(", ") + " for " + name + ".");
+  } catch (e) {
+    say("Could not save: " + (e && e.message ? e.message : e) + ". Please try again.");
+  }
+  renderAll();
+}
+
+async function releaseSeat(id){
+  if (!db) { say("Live saving is not available in this view."); return; }
+  try {
+    await db.collection("seats").doc(id).delete();
+    say("Released " + id + ".");
+  } catch (e) {
+    say("Could not release " + id + ": " + (e && e.message ? e.message : e));
+  }
+}
+
+document.getElementById("reserveBtn").onclick = reserve;
+renderAll();
+
+// Live shared state: subscribe once, re-render on every change.
+if (window.claude && claude.use) {
+  claude.use("db").then(d => {
+    if (!d) { say("Sign in to see and save seats live."); return; }
+    db = d;
+    db.collection("seats").onSnapshot(snap => {
+      const docs = snap.docs || snap;
+      taken = {};
+      docs.forEach(doc => {
+        const data = typeof doc.data === "function" ? doc.data() : doc.data;
+        if (data) taken[doc.id] = { name: data.name, reservedAt: data.reservedAt };
+      });
+      renderAll();
+    });
+  }).catch(() => say("Live saving is not available in this view."));
+} else {
+  say("Live saving is not available in this view.");
+}
+</script>
+</body>
+</html>
